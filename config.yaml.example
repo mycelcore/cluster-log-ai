@@ -1,0 +1,29 @@
+log_api:
+  url: "https://logs.energiesynergie.de"
+  query_range: "1h"  # Logs der letzten Stunde analysieren
+  namespaces: []     # Leer = alle, oder z.B. ["database", "services"]
+
+keycloak:
+  url: "https://auth.energiesynergie.de/realms/ensy"
+  client_id: "log-analyzer"
+  client_secret: "YOUR_CLIENT_SECRET"
+
+ollama:
+  url: "http://localhost:11434"
+  model: "llama3.1:8b"
+  timeout: 120  # Sekunden
+
+telegram:
+  bot_token: "YOUR_BOT_TOKEN"
+  chat_id: "YOUR_CHAT_ID"
+
+schedule:
+  interval: "1h"  # Analyse-Intervall: 15m, 30m, 1h, 6h, 24h
+
+analysis:
+  # Welche Log-Level sollen priorisiert werden
+  priority_levels: ["error", "fatal", "panic"]
+  # Max Zeichen pro Analyse-Batch an Ollama
+  max_context_chars: 8000
+  # Sprache fuer Reports
+  language: "de"
