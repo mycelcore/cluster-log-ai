@@ -1,3 +1,10 @@
+# Identifiziert diese Analyzer-Instanz in der DB. Pro Projekt eigene
+# config.yaml + eigener Container, alle schreiben in dieselbe DB.
+project:
+  slug: "ensy-prod"           # Pflicht, eindeutig. Kleinbuchstaben/Bindestriche.
+  name: "Energiesynergie Prod"
+  description: "K8s Production Cluster"
+
 log_api:
   url: "https://logs.energiesynergie.de"
   query_range: "1h"  # Logs der letzten Stunde analysieren
@@ -9,7 +16,8 @@ keycloak:
   client_secret: "YOUR_CLIENT_SECRET"
 
 ollama:
-  url: "http://localhost:11434"
+  # Im Docker-Setup laeuft Ollama meist auf dem Host -> host.docker.internal
+  url: "http://host.docker.internal:11434"
   model: "llama3.1:8b"
   timeout: 120  # Sekunden
 
@@ -27,3 +35,16 @@ analysis:
   max_context_chars: 8000
   # Sprache fuer Reports
   language: "de"
+  # Strukturierte Security-Findings via 2. Ollama-Call extrahieren
+  extract_findings: true
+
+# Datenbank-Verbindung. Im Docker-Compose-Setup wird DATABASE_URL als ENV
+# gesetzt und hat Vorrang vor diesem Block (siehe db.py).
+# Lokal (ohne Docker) kann die DB hier konfiguriert werden:
+database:
+  enabled: true
+  host: "localhost"
+  port: 5432
+  user: "clusterlogai"
+  password: "CHANGE_ME"
+  name: "clusterlogai"

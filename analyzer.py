@@ -1,3 +1,5 @@
+import json
+
 import ollama
 
 
@@ -33,20 +35,65 @@ Du analysierst Kubernetes-Cluster-Logs aus zwei Perspektiven:
 """
 
 
+# JSON Schema fuer die strukturierte Findings-Extraktion.
+# Ollama-Python (>=0.4) akzeptiert ein dict als format-Parameter und
+# erzwingt strukturierte Ausgabe.
+FINDINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "warning", "critical"],
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "z.B. brute_force, auth_failure, rbac_change, priv_esc, suspicious_pod, port_scan, secret_access, other",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Eine Zeile, was beobachtet wurde",
+                    },
+                    "details": {
+                        "type": "string",
+                        "description": "Mehr Kontext: wo, wann, evtl. betroffene Pods/Namespaces",
+                    },
+                },
+                "required": ["severity", "summary"],
+            },
+        }
+    },
+    "required": ["findings"],
+}
+
+
+FINDINGS_SYSTEM_PROMPT = """Du extrahierst aus einem bereits erstellten Cluster-Log-Analyse-Report
+die SECURITY-relevanten Findings als strukturierte Liste.
+
+Regeln:
+- Nur Security-Findings, keine reinen Operations-Probleme.
+- Wenn der Report keine Security-Auffaelligkeiten hat: gib eine leere Liste zurueck.
+- Severity: 'info' fuer Beobachtungen, 'warning' fuer verdaechtig, 'critical' fuer wahrscheinlichen Angriff.
+- summary kurz (max ~150 Zeichen), details darf ausfuehrlicher sein.
+- Antworte ausschliesslich mit JSON im vorgegebenen Schema.
+"""
+
+
 class LogAnalyzer:
     def __init__(self, url: str = "http://localhost:11434", model: str = "llama3.1:8b", timeout: int = 120):
         self.client = ollama.Client(host=url, timeout=timeout)
         self.model = model
 
     def analyze(self, logs: list[dict], max_chars: int = 8000) -> str:
-        """Logs analysieren und Zusammenfassung zurueckgeben."""
+        """Logs analysieren und Zusammenfassung als Text zurueckgeben."""
         if not logs:
             return "Keine Logs im analysierten Zeitraum gefunden."
 
-        # Logs fuer den Prompt vorbereiten
         log_text = self._prepare_log_text(logs, max_chars)
-
-        # Statistiken erstellen
         stats = self._compute_stats(logs)
 
         user_prompt = f"""Analysiere die folgenden Kubernetes-Cluster-Logs der letzten Stunde.
@@ -72,9 +119,62 @@ Logs (gekuerzt auf relevante Eintraege):
 
         return response["message"]["content"]
 
+    def extract_findings(self, report_text: str) -> list[dict]:
+        """Aus dem Markdown-Report die SECURITY-Findings als strukturierte
+        Liste extrahieren. Nutzt Ollama mit JSON-Schema-Format.
+
+        Gibt im Fehlerfall eine leere Liste zurueck (best-effort, Hauptpfad
+        soll nicht scheitern wenn die Extraktion mal hakt).
+        """
+        if not report_text or not report_text.strip():
+            return []
+
+        try:
+            response = self.client.chat(
+                model=self.model,
+                format=FINDINGS_SCHEMA,
+                messages=[
+                    {"role": "system", "content": FINDINGS_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Hier der Analyse-Report. Extrahiere Security-Findings.\n\n"
+                            + report_text
+                        ),
+                    },
+                ],
+            )
+        except Exception as e:
+            print(f"  WARNUNG: Findings-Extraktion fehlgeschlagen: {e}")
+            return []
+
+        content = response.get("message", {}).get("content", "")
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            print(f"  WARNUNG: Konnte Findings-JSON nicht parsen: {e}")
+            return []
+
+        findings = data.get("findings", [])
+        # Defensive Kopie + Schema-Mindestanforderung pruefen
+        cleaned = []
+        for f in findings:
+            if not isinstance(f, dict):
+                continue
+            summary = (f.get("summary") or "").strip()
+            if not summary:
+                continue
+            cleaned.append({
+                "severity": (f.get("severity") or "info").lower(),
+                "category": f.get("category"),
+                "summary": summary,
+                "details": f.get("details"),
+                "metadata": None,  # Platzhalter fuer spaeter
+            })
+        return cleaned
+
     def _prepare_log_text(self, logs: list[dict], max_chars: int) -> str:
         """Logs in einen Text-Block umwandeln, priorisiert nach Schwere."""
-        # Errors und Warnings zuerst
         priority_logs = [l for l in logs if l["level"] in ("error", "fatal", "panic", "critical")]
         warning_logs = [l for l in logs if l["level"] == "warn"]
         other_logs = [l for l in logs if l["level"] not in ("error", "fatal", "panic", "critical", "warn")]
