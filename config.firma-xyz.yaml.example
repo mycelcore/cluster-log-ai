@@ -1,0 +1,54 @@
+# Beispiel-Config fuer ein zweites Projekt (Firma xyz).
+# Wird per Volume-Mount in einen eigenen analyzer-Container gehaengt
+# und schreibt in dieselbe Postgres-DB wie ensy-prod (unterschieden
+# ueber project.slug bzw. die projects-Tabelle).
+#
+# Verwendung:
+#   1. Diese Datei kopieren: cp config.firma-xyz.yaml.example config.firma-xyz.yaml
+#   2. Werte unten anpassen
+#   3. In compose.yaml den auskommentierten analyzer-firma-xyz Service aktivieren
+#   4. docker compose up -d --build analyzer-firma-xyz
+
+project:
+  slug: "firma-xyz"           # Pflicht, eindeutig pro DB. Kleinbuchstaben/Bindestriche.
+  name: "Firma XYZ Production"
+  description: "K8s Cluster Firma XYZ"
+
+log_api:
+  url: "https://logs.firma-xyz.example.com"
+  query_range: "1h"
+  namespaces: []     # Leer = alle, oder z.B. ["app", "ingress"]
+
+keycloak:
+  url: "https://auth.firma-xyz.example.com/realms/firma-xyz"
+  client_id: "log-analyzer"
+  client_secret: "YOUR_CLIENT_SECRET"
+
+ollama:
+  url: "http://host.docker.internal:11434"
+  model: "llama3.1:8b"
+  timeout: 120
+
+telegram:
+  # Optional pro Projekt eigener Bot/Chat, sonst leer lassen / Platzhalter beibehalten
+  bot_token: "YOUR_BOT_TOKEN"
+  chat_id: "YOUR_CHAT_ID"
+
+schedule:
+  interval: "1h"
+
+analysis:
+  priority_levels: ["error", "fatal", "panic"]
+  max_context_chars: 8000
+  language: "de"
+  extract_findings: true
+
+# Im docker-compose-Setup wird DATABASE_URL als ENV reingegeben und gewinnt
+# vor diesem Block. Hier nur als Fallback fuer lokalen Betrieb ohne Docker.
+database:
+  enabled: true
+  host: "localhost"
+  port: 5432
+  user: "clusterlogai"
+  password: "CHANGE_ME"
+  name: "clusterlogai"
