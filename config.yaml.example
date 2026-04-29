@@ -26,7 +26,11 @@ telegram:
   chat_id: "YOUR_CHAT_ID"
 
 schedule:
-  interval: "1h"  # Analyse-Intervall: 15m, 30m, 1h, 6h, 24h
+  # Stuendlicher Silent-Check: jede Stunde zu dieser Minute laeuft eine
+  # Analyse, Telegram-Nachricht aber nur wenn alert-relevante Findings.
+  hourly_minute: 0
+  # Taeglicher Vollbericht (HH:MM, Container-Zeitzone TZ aus .env).
+  daily_report_at: "09:00"
 
 analysis:
   # Welche Log-Level sollen priorisiert werden
@@ -37,6 +41,9 @@ analysis:
   language: "de"
   # Strukturierte Security-Findings via 2. Ollama-Call extrahieren
   extract_findings: true
+  # Severities, die im stuendlichen Check sofort eine Telegram-Nachricht
+  # ausloesen. Andere Findings werden nur in der DB gespeichert.
+  alert_severities: ["warning", "critical"]
 
 # Datenbank-Verbindung. Im Docker-Compose-Setup wird DATABASE_URL als ENV
 # gesetzt und hat Vorrang vor diesem Block (siehe db.py).

@@ -37,6 +37,43 @@ class TelegramReporter:
         """Kurze Alert-Nachricht senden."""
         return self._send_message(f"[ALERT] {message}")
 
+    def send_findings_alert(
+        self,
+        findings: list[dict],
+        project_label: str | None = None,
+    ) -> bool:
+        """Kompakte Telegram-Nachricht mit den problematischen Findings.
+
+        Bewusst knapp gehalten — landet ggf. mitten in der Nacht im Chat.
+        Format pro Eintrag:
+            [SEVERITY/category] summary
+            details...
+        """
+        if not findings:
+            return True
+
+        header = "[Security Alert]"
+        if project_label:
+            header += f" {project_label}"
+        header += f" — {len(findings)} problematische Finding(s)"
+
+        lines = [header, "-" * 30, ""]
+        for f in findings:
+            sev = (f.get("severity") or "info").upper()
+            cat = f.get("category") or "?"
+            summary = (f.get("summary") or "").strip()
+            details = (f.get("details") or "").strip()
+            lines.append(f"[{sev}/{cat}] {summary}")
+            if details:
+                lines.append(f"  {details}")
+            lines.append("")
+
+        text = "\n".join(lines).rstrip()
+        # Auf Telegram-Limit zuschneiden falls noetig
+        if len(text) > self.MESSAGE_LIMIT:
+            text = text[: self.MESSAGE_LIMIT - 20] + "\n... (gekuerzt)"
+        return self._send_message(text)
+
     def _send_message(self, text: str) -> bool:
         """Nachricht an Telegram API senden. Loggt bei Fehler den Body
         der Telegram-Antwort fuer schnelle Diagnose.

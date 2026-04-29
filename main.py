@@ -10,6 +10,10 @@ from telegram_reporter import TelegramReporter
 from db import Database
 
 
+# Default-Severities, die eine sofortige Telegram-Nachricht ausloesen.
+DEFAULT_ALERT_SEVERITIES = ("warning", "critical")
+
+
 def load_config(path: str = "config.yaml") -> dict:
     """Konfiguration laden."""
     with open(path) as f:
@@ -28,9 +32,32 @@ def _get_db(config: dict) -> Database | None:
         return None
 
 
-def run_analysis(config: dict, db: Database | None = None, project_id: int | None = None):
-    """Eine Analyse-Runde ausfuehren."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Analyse gestartet...")
+def _get_telegram(config: dict) -> TelegramReporter | None:
+    """Telegram-Reporter falls konfiguriert."""
+    tg = config.get("telegram") or {}
+    if tg.get("bot_token") and tg.get("bot_token") != "YOUR_BOT_TOKEN":
+        return TelegramReporter(bot_token=tg["bot_token"], chat_id=tg["chat_id"])
+    return None
+
+
+def run_analysis(
+    config: dict,
+    db: Database | None = None,
+    project_id: int | None = None,
+    *,
+    force_send_full_report: bool = False,
+):
+    """Eine Analyse-Runde ausfuehren.
+
+    Telegram-Verhalten:
+      - force_send_full_report=True  -> immer den vollen Report schicken
+                                        (z.B. taeglich um 09:00)
+      - force_send_full_report=False -> nur ein kompakter Findings-Alert,
+                                        wenn Findings mit alert-Severity da sind
+                                        (z.B. stuendlicher Silent-Check)
+    """
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Analyse gestartet"
+          f"{' (Morgenbericht)' if force_send_full_report else ''}...")
 
     api_conf = config["log_api"]
     keycloak_conf = config["keycloak"]
@@ -40,6 +67,13 @@ def run_analysis(config: dict, db: Database | None = None, project_id: int | Non
     duration = api_conf.get("query_range", "1h")
     namespaces = api_conf.get("namespaces") or None
     model = ollama_conf.get("model")
+    project_conf = config.get("project") or {}
+    project_label = project_conf.get("name") or project_conf.get("slug")
+
+    alert_severities = {
+        s.lower() for s in analysis_conf.get("alert_severities", DEFAULT_ALERT_SEVERITIES)
+    }
+    reporter = _get_telegram(config)
 
     # 1. Logs ueber die Log API holen
     client = LogAPIClient(
@@ -54,7 +88,8 @@ def run_analysis(config: dict, db: Database | None = None, project_id: int | Non
     except Exception as e:
         msg = f"Log API nicht erreichbar: {e}"
         print(f"Fehler beim Abrufen der Logs: {e}")
-        send_error_alert(config, msg)
+        if reporter:
+            reporter.send_alert(msg)
         if db:
             try:
                 db.save_run(
@@ -79,6 +114,8 @@ def run_analysis(config: dict, db: Database | None = None, project_id: int | Non
                 )
             except Exception as db_e:
                 print(f"WARNUNG: Konnte leeren Run nicht in DB speichern: {db_e}")
+        if force_send_full_report and reporter:
+            reporter.send_alert(f"Morgenbericht: keine Logs in den letzten {duration}.")
         return
 
     # 2. Durch Ollama analysieren
@@ -96,7 +133,8 @@ def run_analysis(config: dict, db: Database | None = None, project_id: int | Non
     except Exception as e:
         msg = f"Ollama Analyse fehlgeschlagen: {e}"
         print(f"Fehler bei der Analyse: {e}")
-        send_error_alert(config, msg)
+        if reporter:
+            reporter.send_alert(msg)
         if db:
             try:
                 db.save_run(
@@ -110,7 +148,7 @@ def run_analysis(config: dict, db: Database | None = None, project_id: int | Non
 
     print(f"  Analyse abgeschlossen ({len(report)} Zeichen)")
 
-    # 3. Persistieren: Run + (optional) strukturierte Findings
+    # 3. Run persistieren
     run_id: int | None = None
     if db:
         try:
@@ -123,45 +161,46 @@ def run_analysis(config: dict, db: Database | None = None, project_id: int | Non
         except Exception as db_e:
             print(f"WARNUNG: DB-Schreibvorgang (run) fehlgeschlagen: {db_e}")
 
-    if db and run_id is not None and analysis_conf.get("extract_findings", True):
+    # 4. Strukturierte Findings extrahieren + persistieren
+    findings: list[dict] = []
+    if analysis_conf.get("extract_findings", True):
         try:
             findings = analyzer.extract_findings(report)
-            if findings:
+        except Exception as e:
+            print(f"WARNUNG: Findings-Extraktion fehlgeschlagen: {e}")
+            findings = []
+
+        if findings and db and run_id is not None:
+            try:
                 count = db.save_security_findings(
                     run_id=run_id, project_id=project_id, findings=findings,
                 )
                 print(f"  {count} Security-Finding(s) gespeichert")
-            else:
-                print("  Keine Security-Findings extrahiert")
-        except Exception as e:
-            print(f"WARNUNG: Findings-Extraktion/Speicherung fehlgeschlagen: {e}")
+            except Exception as e:
+                print(f"WARNUNG: Findings-DB-Schreibvorgang fehlgeschlagen: {e}")
+        elif not findings:
+            print("  Keine Security-Findings extrahiert")
 
-    # 4. Report senden
-    if "telegram" in config and config["telegram"].get("bot_token") != "YOUR_BOT_TOKEN":
-        reporter = TelegramReporter(
-            bot_token=config["telegram"]["bot_token"],
-            chat_id=config["telegram"]["chat_id"],
-        )
-        title = f"Log Report ({duration})"
-        success = reporter.send_report(report, title=title)
-        if success:
-            print("  Report per Telegram gesendet.")
-        else:
-            print("  WARNUNG: Telegram-Versand fehlgeschlagen.")
-    else:
+    # 5. Telegram: voller Report ODER kompakter Alert ODER nichts
+    if not reporter:
+        # Ohne Telegram: Report auf stdout
         print("\n" + "=" * 60)
         print(report)
         print("=" * 60 + "\n")
+        return
 
+    if force_send_full_report:
+        title = f"Morgenbericht — {project_label} ({duration})"
+        ok = reporter.send_report(report, title=title)
+        print(f"  Morgenbericht per Telegram: {'OK' if ok else 'FEHLER'}")
+        return
 
-def send_error_alert(config: dict, message: str):
-    """Fehler-Alert senden falls Telegram konfiguriert."""
-    if "telegram" in config and config["telegram"].get("bot_token") != "YOUR_BOT_TOKEN":
-        reporter = TelegramReporter(
-            bot_token=config["telegram"]["bot_token"],
-            chat_id=config["telegram"]["chat_id"],
-        )
-        reporter.send_alert(message)
+    problematic = [f for f in findings if (f.get("severity") or "").lower() in alert_severities]
+    if problematic:
+        ok = reporter.send_findings_alert(problematic, project_label=project_label)
+        print(f"  {len(problematic)} Findings als Alert gesendet: {'OK' if ok else 'FEHLER'}")
+    else:
+        print("  Keine alert-relevanten Findings — kein Telegram-Versand.")
 
 
 def main():
@@ -180,13 +219,22 @@ def main():
         print("FEHLER: 'project.slug' fehlt in der Config. Pflichtfeld fuer Multi-Projekt-DB.")
         sys.exit(1)
 
-    print("cluster-log-ai gestartet")
-    print(f"  Projekt: {project_slug} ({project_conf.get('name', project_slug)})")
-    print(f"  Log API: {config['log_api']['url']}")
-    print(f"  Ollama:  {config['ollama']['url']} ({config['ollama']['model']})")
-    print(f"  Intervall: {config['schedule']['interval']}")
+    schedule_conf = config.get("schedule") or {}
+    hourly_minute = int(schedule_conf.get("hourly_minute", 0))
+    daily_at = schedule_conf.get("daily_report_at", "09:00")
+    # Backward-Compat: altes "interval" wird ignoriert, aber freundlich kommentiert
+    if "interval" in schedule_conf:
+        print("  Hinweis: 'schedule.interval' wird nicht mehr genutzt — "
+              "stuendlicher Silent-Check + taeglicher Bericht via "
+              "'hourly_minute'/'daily_report_at'.")
 
-    # DB initialisieren + Projekt upserten
+    print("cluster-log-ai gestartet")
+    print(f"  Projekt:  {project_slug} ({project_conf.get('name', project_slug)})")
+    print(f"  Log API:  {config['log_api']['url']}")
+    print(f"  Ollama:   {config['ollama']['url']} ({config['ollama']['model']})")
+    print(f"  Schedule: stuendlich um Min {hourly_minute:02d} (silent), "
+          f"taeglich um {daily_at} (Vollbericht)")
+
     db = _get_db(config)
     project_id: int | None = None
     if db:
@@ -205,22 +253,19 @@ def main():
         print("  Database: nicht konfiguriert (laeuft ohne Persistierung)")
     print()
 
-    # Einmal sofort ausfuehren
-    run_analysis(config, db, project_id)
+    # Startup-Run: silent (kein voller Report ausser hourly-Alerts greifen)
+    run_analysis(config, db, project_id, force_send_full_report=False)
 
-    # Danach nach Schedule
-    interval = config["schedule"]["interval"]
-    if interval.endswith("m"):
-        minutes = int(interval[:-1])
-        sched.every(minutes).minutes.do(run_analysis, config, db, project_id)
-    elif interval.endswith("h"):
-        hours = int(interval[:-1])
-        sched.every(hours).hours.do(run_analysis, config, db, project_id)
-    else:
-        sched.every(1).hours.do(run_analysis, config, db, project_id)
+    # Stuendlicher Silent-Check
+    sched.every().hour.at(f":{hourly_minute:02d}").do(
+        run_analysis, config, db, project_id, force_send_full_report=False
+    )
+    # Taeglicher Vollbericht
+    sched.every().day.at(daily_at).do(
+        run_analysis, config, db, project_id, force_send_full_report=True
+    )
 
-    print(f"Scheduler aktiv (naechste Ausfuehrung in {interval})")
-    print("Beenden mit Ctrl+C\n")
+    print(f"Scheduler aktiv. Beenden mit Ctrl+C\n")
 
     try:
         while True:

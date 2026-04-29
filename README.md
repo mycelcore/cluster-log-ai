@@ -91,6 +91,34 @@ Schema-Migration: `init.sql` und `db.ensure_schema()` enthalten am Ende
 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS project_id`. Ein bestehendes Volume aus
 einer Vorversion wird beim Container-Start automatisch nachgezogen.
 
+## Schedule und Telegram-Verhalten
+
+Pro Tag laufen zwei Arten von Jobs:
+
+- **Stuendlicher Silent-Check** (`schedule.hourly_minute`, default Min 00):
+  Analyse laeuft, Run + Findings landen in der DB. Telegram-Nachricht
+  wird **nur** verschickt, wenn ein Finding eine Severity in
+  `analysis.alert_severities` (default `warning`/`critical`) hat — und
+  dann als kompakte Findings-Liste, nicht als voller Report.
+- **Taeglicher Vollbericht** (`schedule.daily_report_at`, default `09:00`):
+  Analyse laeuft, voller Markdown-Report geht per Telegram raus, plus
+  DB-Persistierung wie immer.
+
+Der Startup-Run beim Container-Start verhaelt sich wie der hourly-Check
+(silent ausser bei Alerts) — Container-Restarts fluten den Chat also nicht.
+
+```yaml
+schedule:
+  hourly_minute: 0          # jede Stunde zu Minute 00
+  daily_report_at: "09:00"  # HH:MM in der Container-TZ (.env: TZ)
+
+analysis:
+  alert_severities: ["warning", "critical"]  # was als problematisch gilt
+```
+
+Zeitzone des Containers wird in `.env` ueber `TZ` gesetzt
+(default `Europe/Berlin`). `daily_report_at` versteht sich in dieser TZ.
+
 ## Strukturierte Security-Findings
 
 Nach dem Markdown-Report macht der Analyzer einen zweiten Ollama-Call mit JSON-Schema
@@ -152,7 +180,7 @@ project:
 log_api:    { url, query_range, namespaces }
 keycloak:   { url, client_id, client_secret }
 ollama:     { url, model, timeout }
-schedule:   { interval }      # 15m | 30m | 1h | 6h | 24h
+schedule:   { hourly_minute, daily_report_at }
 ```
 
 Optional: `telegram`, `analysis`, `database` (Letzteres wird im Compose durch
