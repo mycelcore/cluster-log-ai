@@ -18,7 +18,7 @@ log_api:
   namespaces: []     # Leer = alle
 
 keycloak:
-  url: "https://auth.mycelcore.de/realms/hosting/intern"
+  url: "https://auth.mycelcore.de/realms/internal-tools"
   client_id: "log-analyzer"
   client_secret: "YOUR_CLIENT_SECRET"
 

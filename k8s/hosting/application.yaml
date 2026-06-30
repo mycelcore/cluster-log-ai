@@ -4,7 +4,7 @@ metadata:
   name: cluster-log-api
   namespace: argocd
 spec:
-  project: platform # Ggf. anpassen falls eigenes AppProject gewuenscht
+  project: internal-tools
   source:
     repoURL: https://github.com/mycelcore/k8s-manifests.git
     targetRevision: main

@@ -29,7 +29,7 @@ spec:
             - name: LOG_API_LOKI_URL
               value: "http://loki.monitoring.svc.cluster.local:3100"
             - name: LOG_API_KEYCLOAK_URL
-              value: "https://auth.mycelcore.de/realms/hosting/intern"
+              value: "https://auth.mycelcore.de/realms/internal-tools"
           resources:
             requests:
               cpu: 50m
