@@ -208,18 +208,62 @@ Logs (gekuerzt auf relevante Eintraege):
             })
         return cleaned
 
+    # Keywords die auf echte Security-Ereignisse hindeuten — unabhaengig vom Log-Level.
+    SECURITY_KEYWORDS = [
+        "unauthorized", "forbidden", "privilege", "escalat", "nsenter",
+        "shadow", "passwd", "/etc/shadow", "cryptominer", "xmrig",
+        "reverse.shell", "reverse shell", "bind shell", "web shell",
+        "token", "secret", "credential", "brute", "scan", "nmap",
+        "exploit", "cve-", "injection", "exec format", "exec into",
+        "kubectl exec", "suspicious", "malicious", "backdoor",
+        "hostpid", "hostnetwork", "privileged:true", "securitycontext",
+        "mount.*hostpath", "bitcoin", "monero", "miner",
+    ]
+
+    def _is_security_relevant(self, line: str) -> bool:
+        """Prüft ob eine Log-Zeile sicherheitsrelevante Keywords enthält."""
+        lower = line.lower()
+        return any(kw in lower for kw in self.SECURITY_KEYWORDS)
+
     def _prepare_log_text(self, logs: list[dict], max_chars: int) -> str:
-        """Logs in einen Text-Block umwandeln, priorisiert nach Schwere."""
+        """Logs in einen Text-Block umwandeln, priorisiert:
+        1. Security-relevante Logs (keyword-basiert, unabhaengig vom Level)
+        2. Error/Fatal/Panic/Critical
+        3. Warnings
+        4. Rest
+        """
         prio_set = set(self.priority_levels)
-        priority_logs = [l for l in logs if l["level"] in prio_set]
-        warning_logs = [l for l in logs if l["level"] == "warn"]
-        other_logs = [l for l in logs if l["level"] not in prio_set and l["level"] != "warn"]
+
+        security_logs = []
+        priority_logs = []
+        warning_logs = []
+        other_logs = []
+
+        for log in logs:
+            if self._is_security_relevant(log.get("line", "")):
+                security_logs.append(log)
+            elif log["level"] in prio_set:
+                priority_logs.append(log)
+            elif log["level"] == "warn":
+                warning_logs.append(log)
+            else:
+                other_logs.append(log)
+
+        # Buckets mit Tag zusammenfuehren
+        tagged = (
+            [(log, "SEC") for log in security_logs]
+            + [(log, None) for log in priority_logs]
+            + [(log, None) for log in warning_logs]
+            + [(log, None) for log in other_logs]
+        )
 
         lines = []
         char_count = 0
 
-        for log in priority_logs + warning_logs + other_logs:
-            line = f"[{log['namespace']}/{log['pod']}] {log['level'].upper()}: {log['line']}"
+        for log, tag in tagged:
+            level = (log.get("level") or "unknown").upper()
+            prefix = f"SECURITY" if tag == "SEC" else level
+            line = f"[{log['namespace']}/{log['pod']}] {prefix}: {log['line']}"
             if char_count + len(line) > max_chars:
                 break
             lines.append(line)
