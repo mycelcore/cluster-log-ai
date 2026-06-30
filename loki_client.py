@@ -58,7 +58,7 @@ class LogAPIClient:
             ns_filter = "|".join(namespaces)
             query = f'{{namespace=~"{ns_filter}"}}'
         else:
-            query = '{job="loki.source.kubernetes.pods"}'
+            query = None  # Log-API nutzt ihren konfigurierten Default-Selector
 
         return self._query(query, duration)
 
@@ -92,13 +92,14 @@ class LogAPIClient:
         response.raise_for_status()
         return response.json()
 
-    def _query(self, query: str, duration: str, limit: int = 5000) -> list[dict]:
+    def _query(self, query: str | None, duration: str, limit: int = 5000) -> list[dict]:
         """Logs ueber die Log API abfragen."""
         params = {
-            "query": query,
             "duration": duration,
             "limit": limit,
         }
+        if query is not None:
+            params["query"] = query
 
         response = httpx.get(
             f"{self.api_url}/api/query",
