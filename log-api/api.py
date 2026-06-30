@@ -10,12 +10,15 @@ router = APIRouter(prefix="/api", tags=["logs"])
 
 @router.get("/query")
 async def query_logs(
-    query: str = Query(default='{job="loki.source.kubernetes.pods"}', description="LogQL Query"),
+    query: str = Query(default=None, description="LogQL Query"),
     duration: str = Query(default="1h", description="Zeitraum (z.B. 15m, 1h, 6h, 24h)"),
     limit: int = Query(default=5000, ge=1, le=50000),
     token: dict = Depends(verify_token),
 ):
     """Logs aus Loki abfragen per LogQL."""
+    if query is None:
+        query = settings.loki_selector
+
     now = datetime.now(timezone.utc)
     start = now - _parse_duration(duration)
 
@@ -51,7 +54,7 @@ async def list_namespaces(
     start = now - _parse_duration(duration)
 
     params = {
-        "query": '{job="loki.source.kubernetes.pods"}',
+        "query": settings.loki_selector,
         "start": str(int(start.timestamp())),
         "end": str(int(now.timestamp())),
     }
@@ -89,7 +92,7 @@ async def get_errors(
         ns_filter = "|".join(namespaces.split(","))
         query = f'{{namespace=~"{ns_filter}"}} |~ "(?i)(error|fatal|panic|critical)"'
     else:
-        query = '{job="loki.source.kubernetes.pods"} |~ "(?i)(error|fatal|panic|critical)"'
+        query = f'{settings.loki_selector} |~ "(?i)(error|fatal|panic|critical)"'
 
     now = datetime.now(timezone.utc)
     start = now - _parse_duration(duration)
@@ -131,7 +134,7 @@ async def get_stats(
             response = await client.get(
                 f"{settings.loki_url}/loki/api/v1/series",
                 params={
-                    "query": '{job="loki.source.kubernetes.pods"}',
+                    "query": settings.loki_selector,
                     "start": str(int(start.timestamp())),
                     "end": str(int(now.timestamp())),
                 },
