@@ -162,7 +162,7 @@ def run_analysis(
         except Exception as db_e:
             print(f"WARNUNG: DB-Schreibvorgang (run) fehlgeschlagen: {db_e}")
 
-    # 4. Strukturierte Findings extrahieren + persistieren
+    # 4. Strukturierte Findings extrahieren
     findings: list[dict] = []
     if analysis_conf.get("extract_findings", True):
         try:
@@ -171,20 +171,38 @@ def run_analysis(
             print(f"WARNUNG: Findings-Extraktion fehlgeschlagen: {e}")
             findings = []
 
-        if findings and db and run_id is not None:
-            try:
-                count = db.save_security_findings(
-                    run_id=run_id, project_id=project_id, findings=findings,
-                )
-                print(f"  {count} Security-Finding(s) gespeichert")
-            except Exception as e:
-                print(f"WARNUNG: Findings-DB-Schreibvorgang fehlgeschlagen: {e}")
-        elif not findings:
+        if not findings:
             print("  Keine Security-Findings extrahiert")
 
-    # 5. Telegram: voller Report ODER kompakter Alert ODER nichts
+    # 5. Deduplizierung VOR dem Speichern — sonst dedupt sich jeder Run selbst
+    problematic: list[dict] = []
+    if findings:
+        problematic = [f for f in findings if (f.get("severity") or "").lower() in alert_severities]
+
+        if problematic and db:
+            cooldown = int(analysis_conf.get("dedup_cooldown_hours", 8))
+            before = len(problematic)
+            problematic = db.filter_new_findings(
+                project_id=project_id,
+                findings=problematic,
+                cooldown_hours=cooldown,
+            )
+            suppressed = before - len(problematic)
+            if suppressed:
+                print(f"  {suppressed} Finding(s) durch Deduplizierung unterdrueckt (Cooldown: {cooldown}h)")
+
+    # 6. Findings in DB persistieren (nach Dedup, damit der Cooldown greift)
+    if findings and db and run_id is not None:
+        try:
+            count = db.save_security_findings(
+                run_id=run_id, project_id=project_id, findings=findings,
+            )
+            print(f"  {count} Security-Finding(s) gespeichert")
+        except Exception as e:
+            print(f"WARNUNG: Findings-DB-Schreibvorgang fehlgeschlagen: {e}")
+
+    # 7. Telegram: voller Report ODER kompakter Alert ODER nichts
     if not reporter:
-        # Ohne Telegram: Report auf stdout
         print("\n" + "=" * 60)
         print(report)
         print("=" * 60 + "\n")
@@ -195,21 +213,6 @@ def run_analysis(
         ok = reporter.send_report(report, title=title)
         print(f"  Morgenbericht per Telegram: {'OK' if ok else 'FEHLER'}")
         return
-
-    problematic = [f for f in findings if (f.get("severity") or "").lower() in alert_severities]
-
-    # Deduplizierung: bereits kürzlich gemeldete Findings rausfiltern
-    if problematic and db:
-        cooldown = int(analysis_conf.get("dedup_cooldown_hours", 8))
-        before = len(problematic)
-        problematic = db.filter_new_findings(
-            project_id=project_id,
-            findings=problematic,
-            cooldown_hours=cooldown,
-        )
-        suppressed = before - len(problematic)
-        if suppressed:
-            print(f"  {suppressed} Finding(s) durch Deduplizierung unterdrueckt (Cooldown: {cooldown}h)")
 
     if problematic:
         ok = reporter.send_findings_alert(problematic, project_label=project_label)
