@@ -1,0 +1,51 @@
+# Config fuer den Hosting-Cluster Analyzer.
+# Laeuft auf dem Mac Mini zusammen mit der Ensy-Instanz.
+#
+# Verwendung:
+#   1. cp config.hosting.yaml.example config.hosting.yaml
+#   2. Werte unten anpassen (Keycloak-Secret, Telegram-Token)
+#   3. In compose.yaml den analyzer-hosting Service aktivieren
+#   4. docker compose up -d --build analyzer-hosting
+
+project:
+  slug: "hosting"
+  name: "MycelCore Hosting"
+  description: "K8s Hosting Cluster"
+
+log_api:
+  url: "https://cluster.logs.mycelcore.de"
+  query_range: "1h"
+  namespaces: []     # Leer = alle
+
+keycloak:
+  url: "https://auth.mycelcore.de/realms/hosting/intern"
+  client_id: "log-analyzer"
+  client_secret: "YOUR_CLIENT_SECRET"
+
+ollama:
+  url: "http://host.docker.internal:11434"
+  model: "llama3.1:8b"
+  timeout: 120
+
+telegram:
+  bot_token: "YOUR_BOT_TOKEN"
+  chat_id: "YOUR_CHAT_ID"
+
+schedule:
+  hourly_minute: 30   # Versetzt zur Ensy-Instanz (die laeuft um :00)
+  daily_report_at: "09:15"
+
+analysis:
+  priority_levels: ["error", "fatal", "panic"]
+  max_context_chars: 8000
+  extract_findings: true
+  alert_severities: ["critical"]
+  dedup_cooldown_hours: 8
+
+database:
+  enabled: true
+  host: "localhost"
+  port: 5432
+  user: "clusterlogai"
+  password: "CHANGE_ME"
+  name: "clusterlogai"

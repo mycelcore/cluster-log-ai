@@ -14,16 +14,25 @@ Du analysierst Kubernetes-Cluster-Logs aus zwei Perspektiven:
 5. Gib konkrete Handlungsempfehlungen wenn noetig
 
 ## Teil 2: Security Analyse
-1. Erkenne Anzeichen von Angriffen oder unbefugtem Zugriff:
-   - Brute-Force-Versuche (wiederholte Auth-Fehler)
-   - Ungewoehnliche API-Server-Zugriffe oder verbotene Requests (403/401 Haeufungen)
-   - Privilege Escalation Versuche
-   - Verdaechtige Pod-Erstellungen oder Container-Starts
+1. Erkenne Anzeichen von ECHTEN Angriffen oder unbefugtem Zugriff:
+   - Brute-Force-Versuche (viele Auth-Fehler von derselben IP in kurzer Zeit)
+   - Ungewoehnliche API-Server-Zugriffe von unbekannten Quellen
+   - Privilege Escalation Versuche (z.B. exec in privilegierte Pods)
+   - Verdaechtige Pod-Erstellungen mit hostPID/hostNetwork/privileged
    - Port-Scanning oder ungewoehnliche Netzwerkaktivitaet
-   - Zugriffe von unbekannten Service Accounts
-   - Aenderungen an RBAC, Secrets oder Security Policies
-2. Bewerte ob Muster auf gezielte Angriffe oder normale Fehlkonfiguration hindeuten
-3. Bei Verdacht: Dringlichkeit einschaetzen (Info / Warnung / Kritisch)
+   - Zugriffe von unbekannten oder neuen Service Accounts
+   - Unautorisierte Aenderungen an RBAC, Secrets oder Security Policies
+2. Bewerte ob Muster auf gezielte Angriffe hindeuten
+
+WICHTIG — Das sind KEINE Security-Findings, sondern normale Ops-Probleme:
+- Reconciler-Fehler oder Retry-Loops (z.B. external-secrets, cert-manager)
+- Vault/ClusterSecretStore nicht bereit oder Permission-Denied bei Operatoren
+- CrashLoopBackOff, OOMKill, Readiness/Liveness-Probe-Fehler
+- Fehlgeschlagene Deployments, Image-Pull-Fehler
+- Ressourcen-Limits, Evictions, Scheduling-Fehler
+- DNS-Aufloesung, Service-Konnektivitaet
+- Token-Ablauf oder -Erneuerung bei Operatoren und Controllern
+Diese gehoeren in den OPERATIONS-Abschnitt, auch wenn sie 403/401 enthalten.
 
 ## Format
 - Kurz und praegnant (max 600 Woerter)
@@ -52,7 +61,17 @@ FINDINGS_SCHEMA = {
                     },
                     "category": {
                         "type": "string",
-                        "description": "z.B. brute_force, auth_failure, rbac_change, priv_esc, suspicious_pod, port_scan, secret_access, other",
+                        "enum": [
+                            "brute_force",
+                            "auth_failure",
+                            "rbac_change",
+                            "priv_esc",
+                            "suspicious_pod",
+                            "port_scan",
+                            "secret_access",
+                            "unauthorized_access",
+                        ],
+                        "description": "Kategorie des Security-Findings. NUR eine der vorgegebenen Kategorien.",
                     },
                     "summary": {
                         "type": "string",
@@ -75,18 +94,34 @@ FINDINGS_SYSTEM_PROMPT = """Du extrahierst aus einem bereits erstellten Cluster-
 die SECURITY-relevanten Findings als strukturierte Liste.
 
 Regeln:
-- Nur Security-Findings, keine reinen Operations-Probleme.
-- Wenn der Report keine Security-Auffaelligkeiten hat: gib eine leere Liste zurueck.
+- NUR echte Security-Findings. Bei Zweifeln: lieber weglassen.
+- Wenn der Report keine Security-Auffaelligkeiten hat: gib eine LEERE Liste zurueck.
 - Severity: 'info' fuer Beobachtungen, 'warning' fuer verdaechtig, 'critical' fuer wahrscheinlichen Angriff.
+- 'critical' ist reserviert fuer klare Angriffsindikatoren (Brute-Force, Privilege Escalation, unautorisierter Zugriff). Verwende es NICHT fuer operationale Fehler.
 - summary kurz (max ~150 Zeichen), details darf ausfuehrlicher sein.
 - Antworte ausschliesslich mit JSON im vorgegebenen Schema.
+
+Das sind KEINE Security-Findings (NICHT extrahieren):
+- Reconciler-Fehler, Controller-Restart-Loops, Retry-Fehler
+- Vault/SecretStore nicht bereit, Token abgelaufen bei Operatoren
+- CrashLoopBackOff, OOMKill, Probe-Fehler, Scheduling-Probleme
+- 403/401 von Kubernetes-Operatoren (external-secrets, cert-manager etc.)
+- Image-Pull-Fehler, DNS-Probleme, Service-Konnektivitaet
+Diese sind operationale Probleme und gehoeren NICHT in die Findings-Liste.
 """
 
 
 class LogAnalyzer:
-    def __init__(self, url: str = "http://localhost:11434", model: str = "llama3.1:8b", timeout: int = 120):
+    def __init__(
+        self,
+        url: str = "http://localhost:11434",
+        model: str = "llama3.1:8b",
+        timeout: int = 120,
+        priority_levels: list[str] | None = None,
+    ):
         self.client = ollama.Client(host=url, timeout=timeout)
         self.model = model
+        self.priority_levels = priority_levels or ["error", "fatal", "panic", "critical"]
 
     def analyze(self, logs: list[dict], max_chars: int = 8000) -> str:
         """Logs analysieren und Zusammenfassung als Text zurueckgeben."""
@@ -94,7 +129,7 @@ class LogAnalyzer:
             return "Keine Logs im analysierten Zeitraum gefunden."
 
         log_text = self._prepare_log_text(logs, max_chars)
-        stats = self._compute_stats(logs)
+        stats = self.compute_stats(logs)
 
         user_prompt = f"""Analysiere die folgenden Kubernetes-Cluster-Logs der letzten Stunde.
 
@@ -175,9 +210,10 @@ Logs (gekuerzt auf relevante Eintraege):
 
     def _prepare_log_text(self, logs: list[dict], max_chars: int) -> str:
         """Logs in einen Text-Block umwandeln, priorisiert nach Schwere."""
-        priority_logs = [l for l in logs if l["level"] in ("error", "fatal", "panic", "critical")]
+        prio_set = set(self.priority_levels)
+        priority_logs = [l for l in logs if l["level"] in prio_set]
         warning_logs = [l for l in logs if l["level"] == "warn"]
-        other_logs = [l for l in logs if l["level"] not in ("error", "fatal", "panic", "critical", "warn")]
+        other_logs = [l for l in logs if l["level"] not in prio_set and l["level"] != "warn"]
 
         lines = []
         char_count = 0
@@ -192,7 +228,7 @@ Logs (gekuerzt auf relevante Eintraege):
         return "\n".join(lines)
 
     @staticmethod
-    def _compute_stats(logs: list[dict]) -> dict:
+    def compute_stats(logs: list[dict]) -> dict:
         """Basis-Statistiken ueber die Logs berechnen."""
         namespaces = set()
         error_pods = set()

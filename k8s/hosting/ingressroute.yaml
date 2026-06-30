@@ -1,0 +1,19 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: cluster-log-api
+  namespace: internal-tools
+  labels:
+    app.kubernetes.io/name: cluster-log-api
+    app.kubernetes.io/part-of: cluster-log-ai
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`cluster.logs.mycelcore.de`)
+      services:
+        - name: cluster-log-api
+          port: 80
+  tls:
+    certResolver: letsencrypt

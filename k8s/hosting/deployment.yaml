@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-log-api
+  namespace: internal-tools
+  labels:
+    app.kubernetes.io/name: cluster-log-api
+    app.kubernetes.io/part-of: cluster-log-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-log-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cluster-log-api
+        app.kubernetes.io/part-of: cluster-log-ai
+    spec:
+      imagePullSecrets:
+        - name: ghcr-mycelcore
+      containers:
+        - name: log-api
+          image: ghcr.io/mycelcore/log-api:latest
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          env:
+            - name: LOG_API_LOKI_URL
+              value: "http://loki.monitoring.svc.cluster.local:3100"
+            - name: LOG_API_KEYCLOAK_URL
+              value: "https://auth.mycelcore.de/realms/hosting/intern"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault

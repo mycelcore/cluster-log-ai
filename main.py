@@ -11,7 +11,7 @@ from db import Database
 
 
 # Default-Severities, die eine sofortige Telegram-Nachricht ausloesen.
-DEFAULT_ALERT_SEVERITIES = ("warning", "critical")
+DEFAULT_ALERT_SEVERITIES = ("critical",)
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -123,9 +123,10 @@ def run_analysis(
         url=ollama_conf["url"],
         model=ollama_conf["model"],
         timeout=ollama_conf.get("timeout", 120),
+        priority_levels=analysis_conf.get("priority_levels"),
     )
 
-    stats = analyzer._compute_stats(logs)
+    stats = analyzer.compute_stats(logs)
 
     try:
         max_chars = analysis_conf.get("max_context_chars", 8000)
@@ -196,6 +197,20 @@ def run_analysis(
         return
 
     problematic = [f for f in findings if (f.get("severity") or "").lower() in alert_severities]
+
+    # Deduplizierung: bereits kürzlich gemeldete Findings rausfiltern
+    if problematic and db:
+        cooldown = int(analysis_conf.get("dedup_cooldown_hours", 8))
+        before = len(problematic)
+        problematic = db.filter_new_findings(
+            project_id=project_id,
+            findings=problematic,
+            cooldown_hours=cooldown,
+        )
+        suppressed = before - len(problematic)
+        if suppressed:
+            print(f"  {suppressed} Finding(s) durch Deduplizierung unterdrueckt (Cooldown: {cooldown}h)")
+
     if problematic:
         ok = reporter.send_findings_alert(problematic, project_label=project_label)
         print(f"  {len(problematic)} Findings als Alert gesendet: {'OK' if ok else 'FEHLER'}")

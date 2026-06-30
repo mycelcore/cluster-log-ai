@@ -43,7 +43,9 @@ analysis:
   extract_findings: true
   # Severities, die im stuendlichen Check sofort eine Telegram-Nachricht
   # ausloesen. Andere Findings werden nur in der DB gespeichert.
-  alert_severities: ["warning", "critical"]
+  alert_severities: ["critical"]
+  # Stunden, bevor ein identisches Finding erneut gemeldet wird.
+  dedup_cooldown_hours: 8
 
 # Datenbank-Verbindung. Im Docker-Compose-Setup wird DATABASE_URL als ENV
 # gesetzt und hat Vorrang vor diesem Block (siehe db.py).

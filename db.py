@@ -198,6 +198,60 @@ class Database:
 
     # -- Security Findings -------------------------------------------
 
+    def find_recent_similar_findings(
+        self,
+        *,
+        project_id: int | None,
+        summary: str,
+        category: str | None,
+        cooldown_hours: int = 8,
+    ) -> bool:
+        """Prueft ob ein aehnliches Finding in den letzten N Stunden bereits gemeldet wurde.
+
+        Matching: gleiche category UND summary-Aehnlichkeit (Trigram oder exakt).
+        Gibt True zurueck wenn ein Duplikat existiert (=unterdrücken).
+        """
+        if not project_id:
+            return False
+
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM security_findings
+                    WHERE project_id = %s
+                      AND detected_at > NOW() - make_interval(hours => %s)
+                      AND COALESCE(category, '') = COALESCE(%s, '')
+                      AND LOWER(summary) = LOWER(%s)
+                )
+                """,
+                (project_id, cooldown_hours, category, summary),
+            )
+            return cur.fetchone()[0]
+
+    def filter_new_findings(
+        self,
+        *,
+        project_id: int | None,
+        findings: list[dict],
+        cooldown_hours: int = 8,
+    ) -> list[dict]:
+        """Filtert Findings, die in den letzten cooldown_hours schon gemeldet wurden."""
+        if not project_id:
+            return findings
+
+        new = []
+        for f in findings:
+            is_dup = self.find_recent_similar_findings(
+                project_id=project_id,
+                summary=(f.get("summary") or "").strip(),
+                category=f.get("category"),
+                cooldown_hours=cooldown_hours,
+            )
+            if not is_dup:
+                new.append(f)
+        return new
+
     def save_security_findings(
         self,
         *,

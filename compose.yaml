@@ -21,7 +21,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-clusterlogai}
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Schema wird von db.py ensure_schema() verwaltet — kein init.sql noetig.
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
@@ -47,6 +47,27 @@ services:
       - ./config.yaml:/app/config/config.yaml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # ---- Projekt: hosting (MycelCore Hosting Cluster) ----------------------
+  # Vorbereitung:
+  #   cp config.hosting.yaml.example config.hosting.yaml
+  #   Werte anpassen, dann diesen Block einkommentieren und
+  #   `docker compose up -d --build analyzer-hosting`.
+  #
+  # analyzer-hosting:
+  #   build: .
+  #   container_name: cluster-log-ai-analyzer-hosting
+  #   restart: unless-stopped
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   environment:
+  #     DATABASE_URL: postgresql://${POSTGRES_USER:-clusterlogai}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-clusterlogai}
+  #     TZ: ${TZ:-Europe/Berlin}
+  #   volumes:
+  #     - ./config.hosting.yaml:/app/config/config.yaml:ro
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
 
   # ---- Projekt: firma-xyz (Beispiel, auskommentiert) -------------------
   # Vorbereitung:

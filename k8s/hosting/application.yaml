@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-log-api
+  namespace: argocd
+spec:
+  project: platform # Ggf. anpassen falls eigenes AppProject gewuenscht
+  source:
+    repoURL: https://github.com/mycelcore/k8s-manifests.git
+    targetRevision: main
+    path: internal-tools/cluster-log-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: internal-tools
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

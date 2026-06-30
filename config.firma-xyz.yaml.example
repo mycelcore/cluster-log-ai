@@ -43,7 +43,9 @@ analysis:
   max_context_chars: 8000
   language: "de"
   extract_findings: true
-  alert_severities: ["warning", "critical"]
+  alert_severities: ["critical"]
+  # Stunden, bevor ein identisches Finding erneut gemeldet wird.
+  dedup_cooldown_hours: 8
 
 # Im docker-compose-Setup wird DATABASE_URL als ENV reingegeben und gewinnt
 # vor diesem Block. Hier nur als Fallback fuer lokalen Betrieb ohne Docker.
